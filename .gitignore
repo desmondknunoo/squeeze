@@ -9,3 +9,4 @@ dist/
 *.xcuserdata/
 *.xcworkspace/xcuserdata/
 DerivedData/
+.claude/
