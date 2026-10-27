@@ -72,7 +72,7 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
         var id: String { rawValue }
     }
     // Held as reference for Cancel support
-    @State private var currentProcess: Process? = nil
+    @State private var currentJob: CompressionJob? = nil
 
     enum CompressionPreset: String, CaseIterable {
         case highQuality = "High Quality"
@@ -1308,6 +1308,11 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
         let formatSel = outputFormat
         let audioSel = audioOnly
 
+        // Created here on the main thread so Cancel works from the first moment,
+        // including while ffprobe is still reading the file.
+        let job = CompressionJob()
+        currentJob = job
+
         DispatchQueue.global(qos: .userInitiated).async { [input] in
             let startDate = Date()
 
@@ -1321,9 +1326,21 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
             }
             timer.resume()
 
+            // Ends the run without launching ffmpeg (Cancel pressed before launch).
+            let finishCancelled = {
+                DispatchQueue.main.async {
+                    timer.cancel()
+                    isCompressing = false
+                    if currentJob === job { currentJob = nil }
+                    elapsedTime = formatElapsed(Date().timeIntervalSince(startDate))
+                    errorMessage = "Compression cancelled."
+                }
+            }
+
             guard let ffmpegURL = ContentView.findFFmpeg() else {
                 DispatchQueue.main.async {
                     isCompressing = false
+                    if currentJob === job { currentJob = nil }
                     timer.cancel()
                     errorMessage = "ffmpeg not found. Install via `brew install ffmpeg` or bundle it in the app."
                 }
@@ -1335,6 +1352,10 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
             // One ffprobe pass → duration (progress %), audio codec (passthrough?),
             // video codec (hwaccel eligibility), dimensions (no-upscale guard), HDR flag.
             let info = ContentView.probeInput(input)
+            if job.isCancelled {
+                finishCancelled()
+                return
+            }
             // Trimmed jobs report progress against the trimmed length.
             let totalDuration = trimSel.map { $0.1 - $0.0 } ?? info.duration
 
@@ -1362,19 +1383,6 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
             let errorPipe = Pipe()
             process.standardOutput = progressPipe
             process.standardError = errorPipe
-
-            // Drain stderr on its own thread. Reading it only after waitUntilExit()
-            // deadlocks once ffmpeg emits >64KB of errors (the pipe buffer fills,
-            // ffmpeg blocks on write, waitUntilExit never returns).
-            var stderrData = Data()
-            let stderrDone = DispatchGroup()
-            stderrDone.enter()
-            Thread.detachNewThread {
-                stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                stderrDone.leave()
-            }
-
-            DispatchQueue.main.async { currentProcess = process }
 
             // Parse progress output on background queue
             progressPipe.fileHandleForReading.readabilityHandler = { handle in
@@ -1425,7 +1433,27 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
             }
 
             do {
-                try process.run()
+                // Launch and Cancel share the job's lock: a Cancel that lands
+                // first stops the launch, and one that lands after can only
+                // terminate a process that is running.
+                guard try job.launch(process) else {
+                    progressPipe.fileHandleForReading.readabilityHandler = nil
+                    finishCancelled()
+                    return
+                }
+
+                // Drain stderr on its own thread. Reading it only after waitUntilExit()
+                // deadlocks once ffmpeg emits >64KB of errors (the pipe buffer fills,
+                // ffmpeg blocks on write, waitUntilExit never returns). Started only
+                // after launch: unlaunched, the pipe never reaches end-of-file.
+                var stderrData = Data()
+                let stderrDone = DispatchGroup()
+                stderrDone.enter()
+                Thread.detachNewThread {
+                    stderrData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    stderrDone.leave()
+                }
+
                 process.waitUntilExit()
                 // All stderr collected by the reader thread at process exit.
                 stderrDone.wait()
@@ -1435,7 +1463,7 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
                 DispatchQueue.main.async {
                     timer.cancel()
                     isCompressing = false
-                    currentProcess = nil
+                    if currentJob === job { currentJob = nil }
                     let elapsed = Date().timeIntervalSince(startDate)
                     elapsedTime = formatElapsed(elapsed)
 
@@ -1453,7 +1481,9 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
                         if !ContentView.isSameFile(output, input) {
                             try? FileManager.default.removeItem(at: output)
                         }
-                        if process.terminationStatus == SIGTERM {
+                        // ffmpeg traps SIGTERM and exits 255, so the job's flag,
+                        // not the exit status, says whether the user cancelled.
+                        if job.isCancelled {
                             errorMessage = "Compression cancelled."
                         } else if stderrText.isEmpty {
                             errorMessage = "Compression failed (exit \(process.terminationStatus))."
@@ -1467,7 +1497,7 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
                 DispatchQueue.main.async {
                     timer.cancel()
                     isCompressing = false
-                    currentProcess = nil
+                    if currentJob === job { currentJob = nil }
                     errorMessage = error.localizedDescription
                 }
             }
@@ -1475,8 +1505,8 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
     }
 
     func cancelCompression() {
-        currentProcess?.terminate()
-        // termination handler in startCompression will surface "cancelled"
+        // Safe at any stage; runCompression reports "Compression cancelled."
+        currentJob?.cancel()
     }
 
     /// Builds the optimized ffmpeg argument list.
@@ -1999,6 +2029,36 @@ struct ContentView: View {    @EnvironmentObject var settings: AppSettings
         let s = total % 60
         if m > 0 { return String(format: "%dm %02ds", m, s) }
         return String(format: "%.1fs", interval)
+    }
+}
+
+/// One compression run's cancel state, shared between the main thread (Cancel
+/// button) and the background queue that probes and launches ffmpeg.
+final class CompressionJob {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var process: Process?
+
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return cancelled
+    }
+
+    /// Marks the run cancelled and stops ffmpeg if it has been launched.
+    func cancel() {
+        lock.lock(); defer { lock.unlock() }
+        cancelled = true
+        if let process, process.isRunning { process.terminate() }
+    }
+
+    /// Launches `process` unless the run was already cancelled.
+    /// Returns false, without launching, when it was.
+    func launch(_ process: Process) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !cancelled else { return false }
+        try process.run()
+        self.process = process
+        return true
     }
 }
 

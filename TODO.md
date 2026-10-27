@@ -17,9 +17,9 @@ Local video compressor for macOS on Apple Silicon: drop in a video, pick a prese
 - [x] Review and commit the Squeeze rename, Settings, redesigned UI, icon, README and `dist.sh` on `develop` (2026-10-27)
 - [x] Keep `ui/` (15 MB of mockup PNGs) out of git: added to `.gitignore`, README pointer removed
 - [x] Refuse an output filename that resolves to the original video. ffmpeg refused to overwrite its input and the failure path then deleted the output path, which was the original (`isSameFile` in `ContentView.swift`)
-- [ ] Build in Xcode to confirm the change compiles; this Mac has only the Command Line Tools, so only the new `isSameFile` helper was compiled and tested on its own
-- [ ] Make Cancel work during "Probing file…": `currentProcess` is set only after probing, so Cancel does nothing and the encode still starts; cancelling just before `process.run()` calls `terminate()` on an unlaunched process and can crash
-- [ ] Report cancelled runs as cancelled: ffmpeg exits 255 on SIGTERM, so the `SIGTERM` check never matches and the user sees "Compression failed (exit 255)."
+- [ ] Build in Xcode to confirm the app compiles; this Mac has only the Command Line Tools, so `isSameFile` and `CompressionJob` were compiled and tested on their own
+- [x] Make Cancel work at every stage: a `CompressionJob` created before probing records the cancel, stops the launch if ffmpeg has not started, and shares one lock between launch and `terminate()` so an unlaunched process is never terminated (2026-10-27)
+- [x] Report cancelled runs as "Compression cancelled.": ffmpeg exits 255 on SIGTERM, so the job's cancel flag now decides the message instead of the exit status (2026-10-27)
 - [ ] Add `cd "$(dirname "$0")"` to `build.sh` and `dist.sh`; run from another folder, `rm -rf build` / `dist` removes that folder's directory
 - [ ] Have `dist.sh` write `VERSION` into `Info.plist`; `VERSION=1.1 ./dist.sh` names the DMG 1.1 while the app still says 1.0
 - [ ] Remove the camera, microphone and Apple Events usage descriptions from `Info.plist`; the app uses none of them
