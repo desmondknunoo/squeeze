@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Video Compressor - Build Script
-# This script builds the Video Compressor app for macOS
+# Squeeze - Build Script
+# This script builds the Squeeze app for macOS
 
 set -e
 
@@ -12,7 +12,7 @@ CONTENTS_DIR="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 
-echo "🎬 Building Video Compressor..."
+echo "🎬 Building Squeeze..."
 
 # Clean and create build directory
 rm -rf "$BUILD_DIR"
@@ -22,6 +22,9 @@ mkdir -p "$RESOURCES_DIR"
 # Copy Info.plist (values are literal — no Xcode variables to expand)
 cp Info.plist "$CONTENTS_DIR/"
 
+# Copy app icon
+cp Assets/AppIcon.icns "$RESOURCES_DIR/"
+
 # Compile Swift files
 echo "📦 Compiling Swift files..."
 swiftc -o "$MACOS_DIR/$APP_NAME" \
@@ -29,7 +32,9 @@ swiftc -o "$MACOS_DIR/$APP_NAME" \
     -target arm64-apple-macos13.0 \
     -framework SwiftUI \
     -framework AppKit \
-    VideoCompressorApp.swift ContentView.swift
+    -framework AVFoundation \
+    -framework AVKit \
+    SqueezeApp.swift ContentView.swift AppSettings.swift SettingsView.swift
 
 # Make executable
 chmod +x "$MACOS_DIR/$APP_NAME"

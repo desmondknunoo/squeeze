@@ -8,6 +8,10 @@
     <string>Squeeze</string>
     <key>CFBundleIdentifier</key>
     <string>com.desmondk.squeeze</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -27,10 +31,10 @@
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.video</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Video Compressor needs access to process your videos.</string>
+    <string>Squeeze needs access to process your videos.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Video Compressor needs access to process your videos.</string>
+    <string>Squeeze needs access to process your videos.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Video Compressor needs access to process your videos.</string>
+    <string>Squeeze needs access to process your videos.</string>
 </dict>
 </plist>
