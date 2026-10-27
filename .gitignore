@@ -10,3 +10,6 @@ dist/
 *.xcworkspace/xcuserdata/
 DerivedData/
 .claude/
+
+# Design mockups (kept locally)
+ui/
